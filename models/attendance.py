@@ -20,6 +20,8 @@ class AttendanceStatus(PyEnum):
     COMPLETED = "completed"
     ABSENT = "absent"
     FLAGGED = "flagged"
+    APPROVED = "approved"
+    IGNORED = "ignored"
 
 
 class Attendance(Base):

@@ -18,7 +18,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from models.attendance import Attendance
 from models.payroll import PayrollRun
 from models.user import User
-from utils.formatters import format_currency, format_date, format_hours
+from utils.formatters import format_currency, format_date, format_hours, format_employee_id
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -54,7 +54,7 @@ class ExportService:
         # Employee Information
         employee_info = [
             ["Employee Name:", payroll_run.user.full_name],
-            ["Employee ID:", payroll_run.user_id],
+            ["Employee ID:", format_employee_id(payroll_run.user_id)],
             ["Email:", payroll_run.user.email],
             ["Pay Period:", f"{format_date(payroll_run.pay_period_start)} to {format_date(payroll_run.pay_period_end)}"],
         ]
@@ -176,7 +176,7 @@ class ExportService:
         for record in attendance_records:
             data.append({
                 "Attendance ID": record.id,
-                "Employee ID": record.user_id,
+                "Employee ID": format_employee_id(record.user_id),
                 "Employee Name": record.user.full_name,
                 "Email": record.user.email,
                 "Date": format_date(record.date),
@@ -221,7 +221,7 @@ class ExportService:
         for payroll in payroll_runs:
             data.append({
                 "Payroll ID": payroll.id,
-                "Employee ID": payroll.user_id,
+                "Employee ID": format_employee_id(payroll.user_id),
                 "Employee Name": payroll.user.full_name,
                 "Email": payroll.user.email,
                 "Pay Period Start": format_date(payroll.pay_period_start),
@@ -258,9 +258,9 @@ class ExportService:
         """
         # Prepare data for DataFrame
         data = []
-        for user in users:
+        for idx, user in enumerate(sorted(users, key=lambda u: u.id), start=1):
             data.append({
-                "Employee ID": user.id,
+                "Employee ID": format_employee_id(user.id, users),
                 "Full Name": user.full_name,
                 "Email": user.email,
                 "Role": user.role.value.upper(),

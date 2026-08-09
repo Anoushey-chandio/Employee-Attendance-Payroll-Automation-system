@@ -211,18 +211,46 @@ class TestPayrollProcessing:
         assert payroll.status == PayrollStatus.DRAFT
 
     def test_process_payroll_duplicate_period_fails(self, test_db: Session, sample_user: User):
-        """Test that duplicate payroll for same period fails."""
+        """Test that duplicate DRAFT payroll is consolidated, but APPROVED/PAID cannot be overwritten."""
         payroll_engine = PayrollEngine(test_db)
 
-        # First payroll
-        payroll_engine.process_payroll_for_user(
+        # First payroll - creates DRAFT
+        payroll1 = payroll_engine.process_payroll_for_user(
             user_id=sample_user.id,
             pay_period_start=date(2024, 1, 1),
             pay_period_end=date(2024, 1, 31),
             deductions=Decimal("0.00")
         )
+        assert payroll1.status == PayrollStatus.DRAFT
 
-        # Attempt duplicate
+        # Second call with same period - should overwrite DRAFT (consolidation)
+        payroll2 = payroll_engine.process_payroll_for_user(
+            user_id=sample_user.id,
+            pay_period_start=date(2024, 1, 1),
+            pay_period_end=date(2024, 1, 31),
+            deductions=Decimal("100.00")  # Different deductions
+        )
+
+        # Should have succeeded and created a new record
+        assert payroll2.status == PayrollStatus.DRAFT
+        assert payroll2.deductions == Decimal("100.00")
+
+        # Verify only ONE record exists for this period (consolidated)
+        from models.payroll import PayrollRun
+        from sqlalchemy import and_
+        all_runs = test_db.query(PayrollRun).filter(
+            and_(
+                PayrollRun.user_id == sample_user.id,
+                PayrollRun.pay_period_start == date(2024, 1, 1),
+                PayrollRun.pay_period_end == date(2024, 1, 31)
+            )
+        ).all()
+        assert len(all_runs) == 1
+
+        # Approve the payroll
+        payroll_engine.approve_payroll(payroll2.id)
+
+        # Now attempting to create another should fail (cannot overwrite APPROVED)
         with pytest.raises(PayrollProcessingError) as exc_info:
             payroll_engine.process_payroll_for_user(
                 user_id=sample_user.id,

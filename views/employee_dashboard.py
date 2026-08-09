@@ -3,12 +3,22 @@
 Provides employees with check-in/out functionality and personal payroll history.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytz
 import streamlit as st
 from sqlalchemy.orm import Session
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+
+if ZoneInfo is not None:
+    PKT_TZ = ZoneInfo("Asia/Karachi")
+else:
+    PKT_TZ = pytz.timezone("Asia/Karachi")
 
 from models.attendance import AttendanceStatus
 from models.payroll import PayrollStatus
@@ -16,7 +26,7 @@ from services.attendance_service import AttendanceService
 from services.export_service import ExportService
 from services.payroll_engine import PayrollEngine
 from utils.exceptions import AttendanceError
-from utils.formatters import format_currency, format_datetime, format_date, format_hours
+from utils.formatters import format_currency, format_datetime, format_date, format_hours, calculate_shift_metrics, format_attendance_status
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,39 +62,42 @@ def render_employee_dashboard(db: Session) -> None:
     with tab_attendance:
         st.subheader("Time Tracking")
 
-        # Force fresh database query - no caching
-        today = date.today()
+        # Auto-close legacy shifts older than 24 hours
+        try:
+            attendance_service.auto_close_legacy_shifts()
+        except Exception as e:
+            logger.warning(f"Auto-close legacy shifts failed: {str(e)}")
 
-        # Refresh the database session to get latest data
+        # Force fresh database query on every render
         db.expire_all()
-        db.commit()  # Commit any pending transactions before querying
+        db.commit()
 
-        today_attendance = attendance_service.get_attendance_by_user(
-            user_id=user_id,
-            start_date=today,
-            end_date=today
-        )
+        # Check for ACTIVE (open) shift - this determines the button state
+        active_attendance = attendance_service.get_active_attendance(user_id)
+        today_attendance = attendance_service.get_today_attendance(user_id)
 
         col1, col2 = st.columns(2)
 
         with col1:
             st.markdown("### Check In / Check Out")
 
-            # Determine current state
-            has_attendance = bool(today_attendance)
-            is_checked_in = has_attendance and today_attendance[0].is_open_shift
-            is_completed = has_attendance and not today_attendance[0].is_open_shift
+            # Determine current state based on ACTIVE shift (open shift with no check_out)
+            is_checked_in = active_attendance is not None
 
-            if not has_attendance:
-                # No attendance today - show check-in button
-                st.info("ℹ️ You haven't checked in today.")
+            if not is_checked_in:
+                # NO ACTIVE SHIFT -> Show check-in button
+                # This covers: (1) No shift today, (2) Previous shift completed
+                if today_attendance and today_attendance.check_out is not None:
+                    st.info("✅ Previous shift completed. Ready for next shift!")
+                else:
+                    st.info("ℹ️ You haven't checked in today.")
+
                 if st.button("🟢 Check In", use_container_width=True, type="primary", key="btn_check_in"):
                     try:
                         attendance = attendance_service.check_in(user_id=user_id)
-                        db.commit()  # Ensure changes are committed
-                        db.flush()   # Flush to database immediately
+                        db.commit()
+                        db.flush()
                         logger.info(f"Employee checked in: {user_id} at {attendance.check_in}")
-                        # Force immediate UI refresh without showing intermediate message
                         st.rerun()
                     except AttendanceError as e:
                         st.error(f"❌ Check-in failed: {e.message}")
@@ -93,37 +106,50 @@ def render_employee_dashboard(db: Session) -> None:
                         st.error("❌ An unexpected error occurred.")
                         logger.error(f"Check-in error: {str(e)}")
 
-            elif is_checked_in:
-                # Already checked in, waiting for check-out
-                attendance = today_attendance[0]
+            else:
+                # ACTIVE SHIFT -> Show check-out button
+                attendance = active_attendance
+                check_in_time = None
 
-                # Ensure check_in has timezone info
-                check_in_time = attendance.check_in
-                if check_in_time.tzinfo is None:
-                    check_in_time = pytz.UTC.localize(check_in_time)
+                if attendance is not None and getattr(attendance, "check_in", None) is not None:
+                    check_in_time = attendance.check_in
+                    try:
+                        if check_in_time.tzinfo is None:
+                            if hasattr(PKT_TZ, "localize"):
+                                check_in_time = PKT_TZ.localize(check_in_time)
+                            else:
+                                check_in_time = check_in_time.replace(tzinfo=PKT_TZ)
+                        else:
+                            check_in_time = check_in_time.astimezone(PKT_TZ)
+                    except Exception:
+                        pass
 
-                st.success(
-                    f"✅ You are currently Checked In (Shift active since "
-                    f"{format_datetime(check_in_time, 'UTC', '%H:%M:%S')})"
-                )
+                # Working badge
+                st.success("⏳ **Working** - Shift active")
+                st.markdown("---")
 
-                # Calculate current duration
-                current_time = datetime.now(pytz.UTC)
-                duration_seconds = (current_time - check_in_time).total_seconds()
-                current_hours = Decimal(str(duration_seconds / 3600)).quantize(Decimal("0.01"))
+                # Display check-in time
+                if check_in_time is not None:
+                    st.write(f"**Check-in Time:** {format_datetime(check_in_time, 'Asia/Karachi', '%H:%M:%S')}")
 
-                st.metric("Current Duration", format_hours(current_hours))
+                    # Calculate current duration using centralized function
+                    metrics = calculate_shift_metrics(check_in_time, None)
+                    st.metric("⏱️ Current Duration", metrics["display_duration"])
+                else:
+                    st.warning("⚠️ Check-in time is unavailable for this active shift.")
 
-                if st.button("🔴 Check Out", use_container_width=True, type="secondary", key="btn_check_out"):
+                st.markdown("---")
+
+                # Dynamic Check-Out button
+                if st.button("🔴 Check Out", use_container_width=True, type="primary", key="btn_check_out"):
                     try:
                         attendance = attendance_service.check_out(user_id=user_id)
-                        db.commit()  # Ensure changes are committed
-                        db.flush()   # Flush to database immediately
+                        db.commit()
+                        db.flush()
                         logger.info(
                             f"Employee checked out: {user_id} - "
                             f"Regular: {attendance.regular_hours}h, Overtime: {attendance.overtime_hours}h"
                         )
-                        # Force immediate UI refresh without showing intermediate message
                         st.rerun()
                     except AttendanceError as e:
                         st.error(f"❌ Check-out failed: {e.message}")
@@ -132,99 +158,95 @@ def render_employee_dashboard(db: Session) -> None:
                         st.error("❌ An unexpected error occurred.")
                         logger.error(f"Check-out error: {str(e)}")
 
-            elif is_completed:
-                # Already completed today
-                attendance = today_attendance[0]
-
-                st.info("✅ **Your Shift is Off**")
-                st.markdown("---")
-
-                # Display shift details
-                st.markdown("#### Today's Shift Summary")
-
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.metric("Regular Hours", format_hours(attendance.regular_hours))
-                    st.metric("Overtime Hours", format_hours(attendance.overtime_hours))
-                with col_b:
-                    st.metric("Total Hours", format_hours(attendance.total_hours))
-                    st.metric("Status", attendance.status.value.upper())
-
-                # Calculate payroll for this shift
-                st.markdown("---")
-                st.markdown("#### 💰 Calculated Pay for Today")
-
-                # Get user's hourly rate
-                if user_hourly_rate and user_hourly_rate > 0:
-                    # Standard pay calculation
-                    regular_pay = attendance.regular_hours * user_hourly_rate
-
-                    # Overtime pay (typically 1.5x for overtime hours)
-                    overtime_multiplier = Decimal("1.5")
-                    overtime_pay = attendance.overtime_hours * user_hourly_rate * overtime_multiplier
-
-                    total_gross_pay = regular_pay + overtime_pay
-
-                    col_x, col_y, col_z = st.columns(3)
-                    with col_x:
-                        st.metric("Regular Pay", format_currency(regular_pay))
-                    with col_y:
-                        st.metric("Overtime Pay", format_currency(overtime_pay))
-                    with col_z:
-                        st.metric("Total Gross Pay", format_currency(total_gross_pay))
-
-                    st.caption(f"💡 Rate: {format_currency(user_hourly_rate)}/hr | Overtime: {format_currency(user_hourly_rate * overtime_multiplier)}/hr (1.5x)")
-                else:
-                    st.warning("⚠️ Hourly rate not set. Please contact HR to configure your pay rate.")
-
-                st.markdown("---")
-                st.caption("📌 This is a preliminary calculation. Official payroll will be processed at the end of the pay period.")
-
         with col2:
             st.markdown("### Today's Summary")
 
-            if not has_attendance:
-                # No attendance record yet
-                st.info("🕐 **No Check-In Today**\n\nYou haven't started your shift yet. Click 'Check In' to begin tracking your time.")
+            if not is_checked_in:
+                # Show last completed shift if exists
+                if today_attendance and today_attendance.check_out is not None:
+                    attendance = today_attendance
+                    check_in_time = None
+                    if attendance is not None and getattr(attendance, "check_in", None) is not None:
+                        check_in_time = attendance.check_in
+                        try:
+                            if check_in_time.tzinfo is None:
+                                if hasattr(PKT_TZ, "localize"):
+                                    check_in_time = PKT_TZ.localize(check_in_time)
+                                else:
+                                    check_in_time = check_in_time.replace(tzinfo=PKT_TZ)
+                            else:
+                                check_in_time = check_in_time.astimezone(PKT_TZ)
+                        except Exception:
+                            pass
 
-            elif is_checked_in:
+                    check_out_time = None
+                    if attendance is not None and getattr(attendance, "check_out", None) is not None:
+                        check_out_time = attendance.check_out
+                        try:
+                            if check_out_time.tzinfo is None:
+                                if hasattr(PKT_TZ, "localize"):
+                                    check_out_time = PKT_TZ.localize(check_out_time)
+                                else:
+                                    check_out_time = check_out_time.replace(tzinfo=PKT_TZ)
+                            else:
+                                check_out_time = check_out_time.astimezone(PKT_TZ)
+                        except Exception:
+                            pass
+
+                    st.info(
+                        f"✅ **Last Shift Completed**\n\n"
+                        f"**Check-in:** {format_datetime(check_in_time, 'Asia/Karachi', '%H:%M:%S')}\n\n"
+                        f"**Check-out:** {format_datetime(check_out_time, 'Asia/Karachi', '%H:%M:%S')}\n\n"
+                        f"**Total Hours:** {format_hours(attendance.total_hours)}\n\n"
+                        f"**Status:** {format_attendance_status(attendance)}\n\n"
+                        f"💡 Ready to start next shift!"
+                    )
+                else:
+                    st.info("🕐 **No Check-In Today**\n\nYou haven't started your shift yet. Click 'Check In' to begin tracking your time.")
+
+            else:
                 # Active shift in progress
-                attendance = today_attendance[0]
-                check_in_time = attendance.check_in
-                if check_in_time.tzinfo is None:
-                    check_in_time = pytz.UTC.localize(check_in_time)
+                attendance = active_attendance
+                check_in_time = None
+                if attendance is not None and getattr(attendance, "check_in", None) is not None:
+                    check_in_time = attendance.check_in
+                    try:
+                        if check_in_time.tzinfo is None:
+                            if hasattr(PKT_TZ, "localize"):
+                                check_in_time = PKT_TZ.localize(check_in_time)
+                            else:
+                                check_in_time = check_in_time.replace(tzinfo=PKT_TZ)
+                        else:
+                            check_in_time = check_in_time.astimezone(PKT_TZ)
+                    except Exception:
+                        pass
 
-                st.success(
-                    f"⏱️ **Active Shift**\n\n"
-                    f"**Check-in:** {format_datetime(check_in_time, 'UTC', '%H:%M:%S')}\n\n"
-                    f"**Status:** WORKING\n\n"
-                    f"Your shift is currently active. Don't forget to check out when you're done!"
-                )
+                # Calculate current duration
+                if check_in_time is not None:
+                    metrics = calculate_shift_metrics(check_in_time, None)
 
-            elif is_completed:
-                # Shift completed
-                attendance = today_attendance[0]
-                st.info(
-                    f"✅ **Shift Completed**\n\n"
-                    f"**Check-in:** {format_datetime(attendance.check_in, 'UTC', '%H:%M:%S')}\n\n"
-                    f"**Check-out:** {format_datetime(attendance.check_out, 'UTC', '%H:%M:%S')}\n\n"
-                    f"**Total Hours:** {format_hours(attendance.total_hours)}\n\n"
-                    f"**Status:** {attendance.status.value.upper()}"
-                )
+                    st.success(
+                        f"⏳ **Working**\n\n"
+                        f"**Check-in:** {format_datetime(check_in_time, 'Asia/Karachi', '%H:%M:%S')}\n\n"
+                        f"**Duration:** {metrics['display_duration']}\n\n"
+                        f"**Status:** {metrics['status_label']}\n\n"
+                        f"Your shift is currently in progress. Remember to check out when you're done!"
+                    )
+                else:
+                    st.warning("⚠️ Check-in time is unavailable for this active shift.")
 
     # Payroll Tab
     with tab_payroll:
         st.subheader("💰 Your Earnings")
 
         # Fetch all completed attendance records (checked-out shifts)
-        from datetime import timedelta
-
-        # Get attendance records from the last 30 days
-        thirty_days_ago = date.today() - timedelta(days=30)
+        # Get attendance records from the last 30 days in PKT
+        today_pkt = datetime.now(PKT_TZ).date()
+        thirty_days_ago = today_pkt - timedelta(days=30)
         all_attendance = attendance_service.get_attendance_by_user(
             user_id=user_id,
             start_date=thirty_days_ago,
-            end_date=date.today()
+            end_date=today_pkt
         )
 
         # Filter only COMPLETED shifts (checked out)
@@ -278,9 +300,9 @@ def render_employee_dashboard(db: Session) -> None:
 
                     with col_a:
                         st.write(f"**Date:** {format_date(shift.date)}")
-                        st.write(f"**Check-in:** {format_datetime(shift.check_in, 'UTC', '%H:%M:%S')}")
-                        st.write(f"**Check-out:** {format_datetime(shift.check_out, 'UTC', '%H:%M:%S')}")
-                        st.write(f"**Status:** {shift.status.value.upper()}")
+                        st.write(f"**Check-in:** {format_datetime(shift.check_in, 'Asia/Karachi', '%H:%M:%S')}")
+                        st.write(f"**Check-out:** {format_datetime(shift.check_out, 'Asia/Karachi', '%H:%M:%S')}")
+                        st.write(f"**Status:** {format_attendance_status(shift)}")
 
                     with col_b:
                         st.write(f"**Regular Hours:** {format_hours(shift.regular_hours)}")
@@ -367,13 +389,13 @@ def render_employee_dashboard(db: Session) -> None:
         with col1:
             start_date = st.date_input(
                 "From Date",
-                value=date.today().replace(day=1),
+                value=datetime.now(PKT_TZ).date().replace(day=1),
                 key="history_start_date"
             )
         with col2:
             end_date = st.date_input(
                 "To Date",
-                value=date.today(),
+                value=datetime.now(PKT_TZ).date(),
                 key="history_end_date"
             )
 
@@ -384,43 +406,102 @@ def render_employee_dashboard(db: Session) -> None:
                 end_date=end_date
             )
 
-            if not attendance_records:
-                st.info("No attendance records found for the selected period.")
+            # Generate full date range for the selected period
+            date_range = []
+            current_date = start_date
+            while current_date <= end_date:
+                date_range.append(current_date)
+                current_date += timedelta(days=1)
+
+            # Create a mapping of existing attendance records by date
+            # Ensure we normalize date objects for reliable comparison
+            attendance_by_date = {}
+            for record in attendance_records:
+                # Normalize to date object if it's a datetime
+                record_date = record.date
+                if isinstance(record_date, datetime):
+                    record_date = record_date.date()
+                attendance_by_date[record_date] = record
+
+            # Merge existing records with missing dates (marked as ABSENT)
+            full_attendance_list = []
+            for check_date in date_range:
+                if check_date in attendance_by_date:
+                    # Existing record
+                    full_attendance_list.append({
+                        "date": check_date,
+                        "record": attendance_by_date[check_date],
+                        "is_absent": False
+                    })
+                else:
+                    # Missing date - inject virtual ABSENT entry
+                    full_attendance_list.append({
+                        "date": check_date,
+                        "record": None,
+                        "is_absent": True
+                    })
+
+            if not full_attendance_list:
+                st.info("No date range selected.")
             else:
                 # Display records
-                st.write(f"Found {len(attendance_records)} records")
+                st.write(f"Showing {len(full_attendance_list)} days (including absent days)")
 
-                for record in attendance_records:
-                    with st.expander(
-                        f"📅 {format_date(record.date)} - "
-                        f"{record.status.value.upper()} - "
-                        f"{format_hours(record.total_hours)}"
-                    ):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Check-in:** {format_datetime(record.check_in, 'UTC', '%H:%M:%S')}")
-                            st.write(f"**Check-out:** {format_datetime(record.check_out, 'UTC', '%H:%M:%S') if record.check_out else 'Open'}")
-                        with col2:
-                            st.write(f"**Regular Hours:** {format_hours(record.regular_hours)}")
-                            st.write(f"**Overtime Hours:** {format_hours(record.overtime_hours)}")
-                            st.write(f"**Status:** {record.status.value.upper()}")
+                for item in full_attendance_list:
+                    if item["is_absent"]:
+                        # Display ABSENT entry
+                        with st.expander(
+                            f"📅 {format_date(item['date'])} - "
+                            f"ABSENT - "
+                            f"0.00 hrs"
+                        ):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Date:** {format_date(item['date'])}")
+                                st.write(f"**Status:** ABSENT")
+                            with col2:
+                                st.write(f"**Hours:** 0.00 hrs")
+                                st.write(f"**Reason:** No attendance record found")
+                    else:
+                        # Display actual attendance record
+                        record = item["record"]
+                        with st.expander(
+                            f"📅 {format_date(record.date)} - "
+                            f"{format_attendance_status(record)} - "
+                            f"{format_hours(record.total_hours)}"
+                        ):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Check-in:** {format_datetime(record.check_in, 'Asia/Karachi', '%H:%M:%S')}")
+                                st.write(f"**Check-out:** {format_datetime(record.check_out, 'Asia/Karachi', '%H:%M:%S') if record.check_out else 'Open'}")
+                            with col2:
+                                st.write(f"**Regular Hours:** {format_hours(record.regular_hours)}")
+                                st.write(f"**Overtime Hours:** {format_hours(record.overtime_hours)}")
+                                st.write(f"**Status:** {format_attendance_status(record)}")
 
-                # Calculate summary
+                # Calculate summary (only from actual records, not ABSENT days)
+                actual_records = [item["record"] for item in full_attendance_list if not item["is_absent"]]
+
                 total_regular = sum(
-                    r.regular_hours for r in attendance_records
+                    r.regular_hours for r in actual_records
                     if r.status != AttendanceStatus.FLAGGED
                 )
                 total_overtime = sum(
-                    r.overtime_hours for r in attendance_records
+                    r.overtime_hours for r in actual_records
                     if r.status != AttendanceStatus.FLAGGED
                 )
 
+                present_days = len(actual_records)
+                absent_days = len([item for item in full_attendance_list if item["is_absent"]])
+
                 st.markdown("---")
                 st.markdown("### Period Summary")
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Days", len(attendance_records))
+                    st.metric("Total Days", len(full_attendance_list))
                 with col2:
-                    st.metric("Total Regular Hours", format_hours(total_regular))
+                    st.metric("Present Days", present_days)
                 with col3:
-                    st.metric("Total Overtime Hours", format_hours(total_overtime))
+                    st.metric("Absent Days", absent_days)
+                with col4:
+                    st.metric("Total Hours Worked", format_hours(total_regular + total_overtime))

@@ -12,7 +12,7 @@ from config.settings import get_settings
 from models.user import UserRole
 from utils.logger import configure_root_logger, get_logger
 from views.admin_dashboard import render_admin_dashboard
-from views.auth_view import render_auth_view, render_logout_button
+from views.auth_view import clear_user_session, render_auth_view, render_logout_button
 from views.employee_dashboard import render_employee_dashboard
 
 # Configure logging
@@ -38,6 +38,14 @@ def initialize_session_state() -> None:
     query_params = st.query_params
     session_user_id = query_params.get("sid", None)
 
+    # If there is no valid authenticated session, clear any stale sid query param
+    if not st.session_state.get("authenticated", False):
+        if not session_user_id:
+            try:
+                st.query_params.clear()
+            except Exception:
+                pass
+
     # If we have a session token but no active session, restore it
     if session_user_id and not st.session_state.get("authenticated", False):
         # Restore session from query param
@@ -57,10 +65,10 @@ def initialize_session_state() -> None:
                 logger.info(f"Session restored from query params: {user.email}")
             else:
                 # Invalid or inactive user, clear query params
-                st.query_params.clear()
+                clear_user_session()
         except Exception as e:
             logger.error(f"Failed to restore session: {str(e)}")
-            st.query_params.clear()
+            clear_user_session()
         finally:
             db.close()
 
@@ -127,9 +135,32 @@ def render_sidebar() -> None:
             # Navigation
             st.markdown("### 📍 Navigation")
 
-            # Role-based navigation options
+            # Role-based navigation options with dual-view toggle for HR/Admin
             if st.session_state.user_role in [UserRole.ADMIN, UserRole.HR]:
-                st.info("🔧 Admin/HR Dashboard Active")
+                # Initialize view mode if not set
+                if "view_mode" not in st.session_state:
+                    st.session_state.view_mode = "management"
+
+                # Dual-view toggle
+                st.markdown("**Select View:**")
+                view_mode = st.radio(
+                    label="View Mode",
+                    options=["management", "personal"],
+                    format_func=lambda x: "🔧 Management Dashboard" if x == "management" else "👤 Personal Portal (Check-in/Out)",
+                    index=0 if st.session_state.view_mode == "management" else 1,
+                    key="view_mode_radio",
+                    label_visibility="collapsed"
+                )
+
+                # Update session state if changed
+                if view_mode != st.session_state.view_mode:
+                    st.session_state.view_mode = view_mode
+                    st.rerun()
+
+                if st.session_state.view_mode == "management":
+                    st.info("🔧 Management Dashboard Active")
+                else:
+                    st.info("👤 Personal Portal Active")
             else:
                 st.info("👤 Employee Dashboard Active")
 
@@ -161,17 +192,25 @@ def render_sidebar() -> None:
 
 def route_user_dashboard(db: Session) -> None:
     """
-    Route authenticated users to appropriate dashboard based on role.
+    Route authenticated users to appropriate dashboard based on role and view mode.
 
     Args:
         db: SQLAlchemy database session
     """
     user_role = st.session_state.user_role
 
-    # Admin and HR users get admin dashboard
+    # Admin and HR users can toggle between management and personal views
     if user_role in [UserRole.ADMIN, UserRole.HR]:
-        render_admin_dashboard(db)
-    # Employee users get employee dashboard
+        # Check view mode preference (default to management)
+        view_mode = st.session_state.get("view_mode", "management")
+
+        if view_mode == "personal":
+            # HR/Admin viewing their personal check-in/out portal
+            render_employee_dashboard(db)
+        else:
+            # Management dashboard
+            render_admin_dashboard(db)
+    # Employee users always get employee dashboard
     elif user_role == UserRole.EMPLOYEE:
         render_employee_dashboard(db)
     else:

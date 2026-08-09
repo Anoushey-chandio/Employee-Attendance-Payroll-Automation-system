@@ -14,6 +14,17 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def clear_user_session() -> None:
+    """Clear query params, purge session state, and force a rerun."""
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
+
+    st.session_state.clear()
+    st.rerun()
+
+
 def render_auth_view(db: Session) -> None:
     """
     Render authentication interface (login/registration).
@@ -64,7 +75,7 @@ def render_auth_view(db: Session) -> None:
                         st.session_state.authenticated = True
 
                         # Set session token in query params for persistence across refresh
-                        st.query_params["sid"] = user.id
+                        st.query_params["sid"] = str(user.id)
 
                         st.success(f"Welcome back, {user.full_name}!")
                         logger.info(f"User logged in: {user.email}")
@@ -145,27 +156,12 @@ def render_auth_view(db: Session) -> None:
 
 def render_logout_button() -> None:
     """
-    Render logout button in sidebar.
+    Render logout button in sidebar and ensure complete cache/session reset.
     """
     if st.sidebar.button("🚪 Logout", use_container_width=True, type="primary"):
-        # Log the logout action before clearing state
+        # 1. Log action before state clean up
         user_email = st.session_state.get("user_email", "Unknown")
         logger.info(f"User logging out: {user_email}")
 
-        # Clear session token from query params
-        st.query_params.clear()
-
-        # Clear all session state
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-
-        # Reinitialize authentication state
-        st.session_state.authenticated = False
-        st.session_state.user_id = None
-        st.session_state.user_email = None
-        st.session_state.user_name = None
-        st.session_state.user_role = None
-        st.session_state.user_hourly_rate = None
-
-        # Force immediate return to login screen
-        st.rerun()
+        # 2. Clear query parameters, purge all cached data, and force a redirect
+        clear_user_session()

@@ -9,6 +9,32 @@ from sqlalchemy.orm import Session
 from models.user import User, UserRole
 from services.auth_service import AuthService
 from utils.exceptions import AuthenticationError, AuthorizationError, ValidationError
+from views import auth_view
+
+
+class TestSessionManagement:
+    """Regression tests for logout/session cleanup behavior."""
+
+    def test_clear_user_session_clears_query_params_and_state(self, monkeypatch):
+        """Logout cleanup should remove the sid URL parameter and clear session state."""
+
+        class DummyStreamlit:
+            def __init__(self):
+                self.query_params = {"sid": "user-123"}
+                self.session_state = {"authenticated": True, "user_id": "user-123"}
+                self.rerun_calls = 0
+
+            def rerun(self):
+                self.rerun_calls += 1
+
+        dummy_st = DummyStreamlit()
+        monkeypatch.setattr(auth_view, "st", dummy_st)
+
+        auth_view.clear_user_session()
+
+        assert dummy_st.query_params == {}
+        assert dummy_st.session_state == {}
+        assert dummy_st.rerun_calls == 1
 
 
 class TestUserRegistration:

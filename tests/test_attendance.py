@@ -46,19 +46,19 @@ class TestCheckInOperations:
         assert attendance.is_open_shift is True
 
     def test_double_check_in_prevention(self, test_db: Session, sample_user: User):
-        """Test that double check-in on same date is prevented."""
+        """Test that double check-in on same date is prevented when shift is still active."""
         attendance_service = AttendanceService(test_db)
 
         # First check-in
         check_in_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=pytz.UTC)
         attendance_service.check_in(sample_user.id, check_in_time)
 
-        # Attempt second check-in on same date
+        # Attempt second check-in on same date while first shift is still open
         with pytest.raises(AttendanceError) as exc_info:
             second_check_in = datetime(2024, 1, 15, 10, 0, 0, tzinfo=pytz.UTC)
             attendance_service.check_in(sample_user.id, second_check_in)
 
-        assert "already checked in" in exc_info.value.message.lower()
+        assert "active shift" in exc_info.value.message.lower()
 
     def test_check_in_different_days(self, test_db: Session, sample_user: User):
         """Test check-in on different days is allowed."""
@@ -78,6 +78,28 @@ class TestCheckInOperations:
 
         assert attendance2.date == date(2024, 1, 16)
         assert attendance1.id != attendance2.id
+
+    def test_multiple_shifts_same_day_allowed(self, test_db: Session, sample_user: User):
+        """Test that multiple shifts on the same day are allowed after completing previous shift."""
+        attendance_service = AttendanceService(test_db)
+
+        # First shift - check in and check out
+        shift1_check_in = datetime(2024, 1, 15, 9, 0, 0, tzinfo=pytz.UTC)
+        attendance1 = attendance_service.check_in(sample_user.id, shift1_check_in)
+
+        shift1_check_out = datetime(2024, 1, 15, 13, 0, 0, tzinfo=pytz.UTC)
+        attendance_service.check_out(sample_user.id, shift1_check_out)
+
+        # Second shift on same day - should be allowed after first shift is completed
+        shift2_check_in = datetime(2024, 1, 15, 18, 0, 0, tzinfo=pytz.UTC)
+        attendance2 = attendance_service.check_in(sample_user.id, shift2_check_in)
+
+        # Verify both shifts exist for the same date
+        assert attendance1.date == date(2024, 1, 15)
+        assert attendance2.date == date(2024, 1, 15)
+        assert attendance1.id != attendance2.id
+        assert attendance1.check_out is not None  # First shift is completed
+        assert attendance2.check_out is None  # Second shift is still open
 
 
 class TestCheckOutOperations:
@@ -100,7 +122,7 @@ class TestCheckOutOperations:
         assert attendance.regular_hours == Decimal("8.00")
         assert attendance.overtime_hours == Decimal("0.00")
         assert attendance.total_hours == Decimal("8.00")
-        assert attendance.status == AttendanceStatus.PRESENT
+        assert attendance.status == AttendanceStatus.COMPLETED
 
     def test_check_out_with_overtime(self, test_db: Session, sample_user: User):
         """Test check-out with overtime hours calculation."""
@@ -117,7 +139,7 @@ class TestCheckOutOperations:
         assert attendance.regular_hours == Decimal("8.00")
         assert attendance.overtime_hours == Decimal("2.00")
         assert attendance.total_hours == Decimal("10.00")
-        assert attendance.status == AttendanceStatus.PRESENT
+        assert attendance.status == AttendanceStatus.COMPLETED
 
     def test_check_out_excessive_overtime_flagged(self, test_db: Session, sample_user: User):
         """Test that excessive overtime (>4 hours) triggers flagged status."""
@@ -176,7 +198,7 @@ class TestCheckOutOperations:
 
         assert attendance.regular_hours == Decimal("8.00")
         assert attendance.overtime_hours == Decimal("4.00")
-        assert attendance.status == AttendanceStatus.PRESENT  # At cap, not flagged
+        assert attendance.status == AttendanceStatus.COMPLETED  # At cap, not flagged
 
     def test_partial_hour_calculation(self, test_db: Session, sample_user: User):
         """Test calculation with partial hours (e.g., 8.5 hours)."""
@@ -343,7 +365,7 @@ class TestAnomalyDetection:
         # Approve
         approved = attendance_service.approve_flagged_attendance(attendance.id)
 
-        assert approved.status == AttendanceStatus.PRESENT
+        assert approved.status == AttendanceStatus.APPROVED
 
 
 class TestHoursCalculation:
