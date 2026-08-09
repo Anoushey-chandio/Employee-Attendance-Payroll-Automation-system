@@ -1,4 +1,3 @@
-```markdown
 # Enterprise Payroll & Overtime Auditor System
 
 A production-ready, modular Enterprise Payroll & Attendance Automation System built with Python, Streamlit, Supabase PostgreSQL, and SQLAlchemy 2.0.
@@ -15,9 +14,7 @@ A production-ready, modular Enterprise Payroll & Attendance Automation System bu
 
 ## Architecture
 
-
 ```
-
 ├── config/              # Configuration & database setup
 ├── models/              # SQLAlchemy ORM models
 ├── services/            # Business logic layer (payroll, attendance, auth)
@@ -26,7 +23,6 @@ A production-ready, modular Enterprise Payroll & Attendance Automation System bu
 ├── tests/               # Pytest test suite
 ├── main.py              # Application entrypoint
 └── requirements.txt     # Production dependencies
-
 ```
 
 ## Installation
@@ -34,29 +30,24 @@ A production-ready, modular Enterprise Payroll & Attendance Automation System bu
 1. **Clone and navigate to the project:**
    ```bash
    cd Payroll-system
-
-```
+   ```
 
 2. **Install dependencies:**
-```bash
-pip install -r requirements.txt
-
-```
-
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 3. **Configure environment variables:**
-Ensure `.env` contains your database and app configurations:
-```env
-DATABASE_URL=postgresql://...
-SUPABASE_URL=https://...
-SUPABASE_KEY=...
-SECRET_KEY=...
-APP_ENV=production
-USE_LOCAL_SQLITE=False
-
-```
-
-
+   
+   Ensure `.env` contains your database and app configurations:
+   ```env
+   DATABASE_URL=postgresql://...
+   SUPABASE_URL=https://...
+   SUPABASE_KEY=...
+   SECRET_KEY=...
+   APP_ENV=production
+   USE_LOCAL_SQLITE=False
+   ```
 
 ## Running the Application
 
@@ -64,7 +55,6 @@ USE_LOCAL_SQLITE=False
 
 ```bash
 streamlit run main.py
-
 ```
 
 The application will be available at `http://localhost:8501`
@@ -80,7 +70,6 @@ pytest tests/ --cov=. --cov-report=html
 
 # Run specific test file
 pytest tests/test_payroll_engine.py -v
-
 ```
 
 ## Usage Guide
@@ -138,7 +127,3 @@ The system is validated by **83 unit and integration tests** covering:
 ## License
 
 Enterprise Payroll System - Internal Use
-
-```
-
-```
