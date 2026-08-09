@@ -118,7 +118,7 @@ pytest tests/test_payroll_engine.py -v
 
 ## Testing
 
-The system is validated by **83 unit and integration tests** covering:
+The system is validated by **84 unit and integration tests** covering:
 
 * Authentication & RBAC permissions
 * Check-in/out continuous shift workflows & status rendering
