@@ -29,7 +29,8 @@ A production-ready, modular Enterprise Payroll & Attendance Automation System bu
 
 1. **Clone and navigate to the project:**
    ```bash
-   cd Payroll-system
+   git clone https://github.com/Anoushey-chandio/Employee-Attendance-Payroll-Automation-system.git
+cd Employee-Attendance-Payroll-Automation-system
    ```
 
 2. **Install dependencies:**
