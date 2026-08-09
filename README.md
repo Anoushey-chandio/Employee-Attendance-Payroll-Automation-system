@@ -1,27 +1,32 @@
+```markdown
 # Enterprise Payroll & Overtime Auditor System
 
 A production-ready, modular Enterprise Payroll & Attendance Automation System built with Python, Streamlit, Supabase PostgreSQL, and SQLAlchemy 2.0.
 
 ## Features
 
-- **Role-Based Access Control (RBAC)**: Admin, HR, and Employee roles with hierarchical permissions
-- **Time Tracking**: Employee check-in/out with automatic overtime calculation
-- **Payroll Processing**: Automated salary calculation with Decimal precision for financial accuracy
-- **Anomaly Detection**: Auto-flagging of excessive overtime and unclosed shifts
-- **Export Capabilities**: PDF payslips and CSV audit reports
-- **Comprehensive Testing**: 71 automated tests with 100% pass rate
+- **Role-Based Access Control (RBAC)**: Admin, HR, and Employee roles with hierarchical permissions.
+- **Time Tracking**: Employee check-in/out with real-time status updates (`PRESENT (In Progress)`, `PRESENT (Shift Completed)`, `ABSENT`).
+- **Monthly Payroll Consolidation**: Clean 1-card per employee view per month with automated duplicate draft handling.
+- **Ignored Shift Exclusion**: Attendance marked as `IGNORED` strictly contributes `0.00` hours and `0.00 PKR` to gross/net pay.
+- **Anomaly Detection**: Auto-flagging of excessive overtime and unclosed shifts for admin/HR review.
+- **Export & Management Capabilities**: PDF payslips, CSV audit reports, and manual draft deletion/purge controls.
+- **Comprehensive Testing**: 83 automated tests with a 100% pass rate.
 
 ## Architecture
 
+
 ```
+
 ├── config/              # Configuration & database setup
 ├── models/              # SQLAlchemy ORM models
-├── services/            # Business logic layer
-├── views/               # Streamlit UI components
-├── utils/               # Utilities (logging, formatting, exceptions)
+├── services/            # Business logic layer (payroll, attendance, auth)
+├── views/               # Streamlit UI components (admin, HR, employee, personal portal)
+├── utils/               # Utilities (logging, formatting, custom exceptions)
 ├── tests/               # Pytest test suite
 ├── main.py              # Application entrypoint
 └── requirements.txt     # Production dependencies
+
 ```
 
 ## Installation
@@ -29,24 +34,29 @@ A production-ready, modular Enterprise Payroll & Attendance Automation System bu
 1. **Clone and navigate to the project:**
    ```bash
    cd Payroll-system
-   ```
+
+```
 
 2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+
+```
+
 
 3. **Configure environment variables:**
-   
-   The `.env` file is already configured with Supabase credentials:
-   ```
-   DATABASE_URL=postgresql://...
-   SUPABASE_URL=https://...
-   SUPABASE_KEY=...
-   SECRET_KEY=...
-   APP_ENV=production
-   USE_LOCAL_SQLITE=False
-   ```
+Ensure `.env` contains your database and app configurations:
+```env
+DATABASE_URL=postgresql://...
+SUPABASE_URL=https://...
+SUPABASE_KEY=...
+SECRET_KEY=...
+APP_ENV=production
+USE_LOCAL_SQLITE=False
+
+```
+
+
 
 ## Running the Application
 
@@ -54,6 +64,7 @@ A production-ready, modular Enterprise Payroll & Attendance Automation System bu
 
 ```bash
 streamlit run main.py
+
 ```
 
 The application will be available at `http://localhost:8501`
@@ -69,110 +80,65 @@ pytest tests/ --cov=. --cov-report=html
 
 # Run specific test file
 pytest tests/test_payroll_engine.py -v
+
 ```
 
 ## Usage Guide
 
-### First-Time Setup
-
-1. Launch the application
-2. Register a new account on the "Register" tab
-3. Initial users are created as Employees
-
-### Admin Users
-
-To create an admin user, you'll need to:
-1. Register as an employee first
-2. Manually update the user role in the database to "admin", or
-3. Have an existing admin create your account through the Admin Dashboard
-
 ### Employee Features
 
-- **Attendance Tab**: Check in/out for work shifts
-- **Payroll Tab**: View payslips and download PDF
-- **History Tab**: Review past attendance records
+* **Personal Portal**: Continuous daily shift check-in/out.
+* **Payroll Tab**: View monthly payslips and download PDF files.
+* **History Tab**: Review complete attendance logs with detailed status breakdown.
 
-### Admin Features
+### Admin & HR Features
 
-- **Users Tab**: Create/manage users, update hourly rates
-- **Payroll Tab**: Process payroll batches, approve payments
-- **Attendance Tab**: Monitor open shifts
-- **Flagged Records Tab**: Review and approve anomalies
-- **Reports Tab**: Export CSV reports for auditing
+* **Users Tab**: Create/manage user roles, activate/deactivate accounts, and update hourly rates.
+* **Payroll Tab**: Process monthly batch payrolls, clean up duplicate drafts, recalculate drafts on attendance updates, and purge redundant runs.
+* **Attendance Tab**: Monitor real-time shifts and load historical records.
+* **Flagged Records Tab**: Audit excessive overtime and explicitly approve or ignore flagged attendance shifts.
+* **Reports Tab**: Export aggregated CSV audit reports.
 
 ## Business Rules
 
 ### Attendance
-- Regular hours capped at **8 hours/day**
-- Overtime calculated at **1.5x** hourly rate
-- Overtime capped at **4 hours/day**
-- Exceeding caps triggers auto-flagging for HR review
-- Unclosed shifts past midnight are auto-flagged
+
+* Regular hours capped at **8 hours/day**.
+* Overtime calculated at **1.5x** hourly rate.
+* Overtime capped at **4 hours/day**.
+* Exceeding caps triggers auto-flagging for HR/Admin review.
+* Attendance marked as **IGNORED** is excluded from payable hours.
 
 ### Payroll Calculation
-- **Gross Pay** = (Regular Hours × Rate) + (OT Hours × Rate × 1.5)
-- **Net Pay** = Gross Pay - Deductions
-- All calculations use `Decimal` for financial precision
-- No floating-point arithmetic
 
-### Security
-- Passwords hashed with bcrypt
-- Role-based access control enforced at service layer
-- Session-based authentication via Streamlit
-
-## Testing
-
-The system includes comprehensive test coverage:
-
-- **Authentication Tests** (22 tests): User registration, login, RBAC
-- **Attendance Tests** (20 tests): Check-in/out, overtime logic, anomaly detection
-- **Payroll Engine Tests** (29 tests): Financial calculations, batch processing
-
-All tests validate:
-- Decimal precision for financial accuracy
-- Edge case handling (double check-in, negative pay, etc.)
-- Business rule enforcement
-- Error handling and validation
+* **Gross Pay** = (Regular Hours × Rate) + (OT Hours × Rate × 1.5)
+* **Net Pay** = Gross Pay - Deductions
+* All financial logic uses Python's `Decimal` module for precision (no floating-point rounding errors).
+* Batch generation overwrites previous draft states for the same month to ensure strict single-card presentation per user.
 
 ## Technology Stack
 
-- **Framework**: Streamlit 1.31.0
-- **ORM**: SQLAlchemy 2.0.25
-- **Database**: PostgreSQL (via Supabase)
-- **Authentication**: Passlib + Bcrypt
-- **PDF Generation**: ReportLab 4.0.9
-- **Data Export**: Pandas 2.1.4
-- **Testing**: Pytest 7.4.4
+* **Framework**: Streamlit 1.31.0
+* **ORM**: SQLAlchemy 2.0.25
+* **Database**: PostgreSQL (via Supabase)
+* **Authentication**: Passlib + Bcrypt
+* **PDF Generation**: ReportLab 4.0.9
+* **Data Export**: Pandas 2.1.4
+* **Testing**: Pytest 7.4.4
 
-## Database Schema
+## Testing
 
-### users
-- id, email, password_hash, full_name, role, hourly_rate, is_active, created_at
+The system is validated by **83 unit and integration tests** covering:
 
-### attendance
-- id, user_id, date, check_in, check_out, regular_hours, overtime_hours, status
-
-### payroll_runs
-- id, user_id, pay_period_start, pay_period_end, base_salary, overtime_pay, deductions, net_pay, status
-
-## Development
-
-### Code Style
-- Strict Python type hints
-- PEP 8 compliant
-- SQLAlchemy 2.0 OOP patterns
-- Clean separation of concerns
-
-### Error Handling
-- Custom exception hierarchy
-- No raw tracebacks in UI
-- Atomic database transactions
-- Connection retry with exponential backoff
+* Authentication & RBAC permissions
+* Check-in/out continuous shift workflows & status rendering
+* Financial accuracy, Decimal rounding, and IGNORED shift exclusions
+* Batch re-processing, draft deduplication, and database atomic transactions
 
 ## License
 
 Enterprise Payroll System - Internal Use
 
-## Support
+```
 
-For issues or questions, contact the development team.
+```
